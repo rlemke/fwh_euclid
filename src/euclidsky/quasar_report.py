@@ -106,7 +106,8 @@ def score(rows: list[dict]) -> dict:
         "covered": len(q),
         "detected": sum(1 for r in q if r["matched"]),
         "labelled": len(det),
-        "phz_qso_flag": sum(1 for r in det if r["phz_class"] is not None and r["phz_class"] & 4),
+        # Negative classes mean "not classified", and -1 has every bit set.
+        "phz_qso_flag": sum(1 for r in det if (r["phz_class"] or 0) > 0 and r["phz_class"] & 4),
         "phz_class": dict(
             Counter("none" if r["phz_class"] is None else str(r["phz_class"]) for r in det)
         ),
@@ -194,6 +195,7 @@ def reverse(qso: Path, refs_csv: Path) -> dict:
     for r in csv.DictReader(refs_csv.open()):
         ref[int(r["tile"])].append((float(r["ra"]), float(r["dec"]), r["type"]))
     n = known = cand = 0
+    bright = bright_starlike = faint = faint_known = 0
     for p in (qso / "reverse").glob("*.json"):
         d = json.loads(p.read_text())
         refs = ref.get(d["tile"], [])
@@ -206,16 +208,30 @@ def reverse(qso: Path, refs_csv: Path) -> dict:
                 if dd < 1.0:
                     best = typ
                     break
-            if best and best[:1] in "QABKN":
+            is_known = bool(best and best[:1] in "QABKN")
+            if is_known:
                 known += 1
             elif best:
                 cand += 1
+            f = num(o.get("flux_detection_total"))
+            mag = -2.5 * math.log10(f) + 23.9 if f and f > 0 else None
+            pl = num(o.get("point_like_prob"))
+            if mag is not None and mag < 20:
+                bright += 1
+                bright_starlike += pl is None or pl >= 0.5
+            elif mag is not None and mag >= 22:
+                faint += 1
+                faint_known += is_known
     return {
         "tiles": len(list((qso / "reverse").glob("*.json"))),
         "spectral_qsos": n,
         "known": known,
         "reference_candidates_only": cand,
         "known_frac": _frac(known, n),
+        "bright": bright,
+        "bright_starlike": bright_starlike,
+        "faint": faint,
+        "faint_known": faint_known,
     }
 
 

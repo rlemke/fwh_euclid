@@ -93,7 +93,6 @@ def quasar_html(s: dict) -> str:
     sc = s["spe_class"]
     zq = s["z_spec_qso_template"]
     zr = s["z_spec_reported"]
-    zg = s["z_spec_reported_by_class"].get("galaxy", {})
     fit = s["z_photo_qso_fit"]
     rows = "".join(
         f"<tr><td>{b['bin']}</td><td>{b['known']:,}</td><td>{_pct(b['detected'])}</td>"
@@ -110,20 +109,26 @@ def quasar_html(s: dict) -> str:
     rev_html = ""
     if rev and rev["spectral_qsos"]:
         rev_html = f"""
-<p><b>The other direction.</b> In the {rev["tiles"]} tiles where the reference is densest,
-Euclid's spectra call {rev["spectral_qsos"]:,} objects quasars. Only
-{rev["known"]:,} ({_pct(rev["known_frac"])}) are confirmed active nuclei in the reference.
-That is a lower bound on how many are real, because no reference has taken a spectrum
-of every faint object. It does show the label cannot be read as "a quasar" without
-checking.</p>"""
+<p><b>The other direction.</b> In the {rev["tiles"]} tiles where known quasars are densest,
+Euclid's spectra call {rev["spectral_qsos"]:,} objects quasars. Only {rev["known"]:,}
+({_pct(rev["known_frac"])}) are confirmed active nuclei in the reference.
+{_f(rev["bright"])} of them are brighter than magnitude 20, and {_f(rev["bright_starlike"])}
+of those are point-like or saturated, which is how stars look; a quasar that bright would
+very likely have been catalogued already. {_f(rev["faint"])} are fainter than magnitude 22,
+below what the reference covers, so for those this check can say nothing. The quasar label in
+DR1 cannot be taken to mean "a quasar" without a second test.</p>"""
     bars = _bars(
         [
-            ("galaxy", sc.get("galaxy", 0), "the redshift reported is the galaxy template's"),
+            ("galaxy", sc.get("galaxy", 0), ""),
             ("quasar", sc.get("qso", 0), ""),
             ("star", sc.get("star", 0), ""),
         ],
         spec,
     )
+    zq_ = s["z_spec_reported_by_class"].get("qso", {})
+    bright = s["by_mag"][0] if s["by_mag"] else {}
+    faint = s["by_mag"][-1] if s["by_mag"] else {}
+    no_class = s["phz_class"].get("none", 0)
     return f"""
 <h2>Does Euclid recognise quasars that are already known?</h2>
 <p>ESA's release counts "over 60 million quasar candidates". No table in the public archive
@@ -131,22 +136,27 @@ marks such a set, so this checks the labels the archive does carry against
 {s["covered"]:,} quasars whose spectra other telescopes have already taken (the Million
 Quasars catalogue, type-1 quasars only), at places where Euclid has data.
 Euclid detects {_pct(s["detected"] / s["covered"] if s["covered"] else None)} of them
-within 1 arcsecond.</p>
+within 1 arcsecond, so finding them is not the problem. Labelling them is.</p>
 <ul>
-<li><b>The photometric quasar classifier is not switched on in DR1.</b> All {det:,} detected
-quasars have a quasar probability of 0 against a threshold of 1.0, and the quasar bit of
-the class flag is set for {s["phz_qso_flag"]:,} of them. The classifier calls
-{_pct(s["phz_class"].get("2", 0) / det if det else None)} of them galaxies.</li>
+<li><b>The photometric classifier never says quasar.</b> None of the {det:,} detected
+quasars has the quasar bit of its class flag set, and every quasar probability is 0
+(the threshold is 1.0). It calls {_pct(s["phz_class"].get("2", 0) / det if det else None)}
+of them galaxies; {no_class:,} have no photometric class at all.</li>
 <li><b>A quasar template is fitted to the photometry</b> of {_pct(s["qso_fit"] / det if det else None)}
-of them. Its redshift is within 10% (in 1+z) for {_pct(fit["frac"])} of {fit["n"]:,}.</li>
+of them anyway. Its redshift is within 10% (in 1+z) for {_pct(fit["frac"])} of {fit["n"]:,},
+against {_pct(s["z_photo_galaxy"]["frac"])} for the galaxy redshift the catalogue reports.</li>
 <li><b>Euclid's own spectrum</b> exists for {spec:,} of them. Its classifier calls them:</li>
 </ul>
 {bars}
-<p>Fitting the quasar template to those same spectra gives the right redshift (within 1%
-in 1+z) for {_pct(zq["frac"])} of them. The redshift Euclid actually reports, from whichever
-template its classifier picked, is right for {_pct(zr["frac"])}. For the quasars it calls
-galaxies, the reported redshift is right for {_pct(zg.get("frac"))}. The spectra see the
-quasar; the classifier picks the wrong template.</p>
+<p>When the spectrum does say quasar, its redshift is right (within 1% in 1+z) for
+{_pct(zq_.get("frac"))}. But that is {_pct(sc.get("qso", 0) / spec if spec else None)} of them.
+For all {spec:,}, the redshift Euclid reports, from whichever template its classifier chose,
+is right for {_pct(zr["frac"])}; refitting with the quasar template would make it
+{_pct(zq["frac"])}. The gain is in the bright ones (quasar-template redshift right for
+{_pct(bright.get("qso_template_z_ok"))} brighter than magnitude 19, {_pct(faint.get("qso_template_z_ok"))}
+fainter than 22): for those, the spectrum holds the quasar's lines and the classifier
+mostly picks the galaxy template instead. For the faint ones the spectrum is too noisy
+for any template.</p>
 {rev_html}
 <table>
 <thead><tr><th>Known quasar, r magnitude</th><th>Known</th><th>Detected</th><th>Has a Euclid spectrum</th>

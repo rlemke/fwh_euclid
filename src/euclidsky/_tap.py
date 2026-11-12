@@ -80,7 +80,7 @@ def query(adql: str, *, retries: int = 5, timeout: float = 600.0) -> list[dict[s
 
 def num(s: str | None) -> float | None:
     """A CSV cell as a float; empty and NaN become None."""
-    if s is None or s == "" or s.lower() == "nan":
+    if s is None or s.strip() in ("", "--") or s.lower() == "nan":
         return None
     v = float(s)
     return None if math.isnan(v) else v

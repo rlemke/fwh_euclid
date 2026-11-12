@@ -35,6 +35,8 @@ from ._tap import QueryError, num, query
 TILE_DEC_STEP = 0.5
 GRID = 10
 CATALOGUE = "dr1.mer_catalogue_wide_survey"
+#: The deep-field areas, processed to wide depth, are a table of their own.
+CATALOGUE_DEEP_AREAS = "dr1.mer_catalogue_wide_mode"
 PHOTO_Z = "dr1.phz_photo_z_wide"
 
 
@@ -117,14 +119,14 @@ def _core_where(t: Tile, a: str = "m") -> str:
     return f"{dec} AND {ra}"
 
 
-def counts_query(t: Tile) -> str:
+def counts_query(t: Tile, catalogue: str = CATALOGUE) -> str:
     cx = f"FLOOR(MOD(m.right_ascension - {t.ra_lo:.6f} + 720, 360) / {t.dra:.6f} * {GRID})"
     cy = f"FLOOR((m.declination - {t.dec_lo:.6f}) / {t.ddec:.6f} * {GRID})"
     return (
         "SELECT cx, cy, pl, vd, mb, COUNT(*) AS n FROM ("
         f"SELECT {cx} AS cx, {cy} AS cy, FLOOR(m.point_like_prob * 2) AS pl, "
         "m.vis_det AS vd, FLOOR(23.9 - 2.5 * LOG10(m.flux_detection_total)) AS mb "
-        f"FROM {CATALOGUE} m WHERE m.tile_index = {t.tile_index} "
+        f"FROM {catalogue} m WHERE m.tile_index = {t.tile_index} "
         f"AND m.spurious_flag = 0 AND m.flux_detection_total > 0 AND {_core_where(t)}"
         ") AS s GROUP BY cx, cy, pl, vd, mb"
     )
@@ -192,10 +194,10 @@ def _int(s: str) -> int | None:
     return None if v is None else int(v)
 
 
-def survey_tile(t: Tile) -> dict:
-    """One tile's counts and brightest galaxies, as a JSON-able dict."""
+def survey_tile(t: Tile, catalogue: str = CATALOGUE) -> dict:
+    """One tile's counts, as a JSON-able dict."""
     t0 = time.time()
-    rows = query(counts_query(t))
+    rows = query(counts_query(t, catalogue))
     cells = []
     for r in rows:
         cx, cy = _int(r["cx"]), _int(r["cy"])
@@ -215,6 +217,7 @@ def survey_tile(t: Tile) -> dict:
     sample: list[dict] = []
     return {
         "tile": asdict(t),
+        "catalogue": catalogue,
         "grid": GRID,
         "cells": cells,
         "sample": sample,
@@ -255,6 +258,8 @@ def run(
     tiles = load_tiles(out)
     if only is not None:
         tiles = [t for t in tiles if t.tile_index in only]
+    if stage == "fill":
+        return fill_deep_areas(out, tiles, workers)
     sub = "tiles" if stage == "counts" else "samples"
     fn = survey_tile if stage == "counts" else sample_tile
     (out / sub).mkdir(exist_ok=True)
@@ -296,12 +301,40 @@ def run(
     return 1 if failed else 0
 
 
+def fill_deep_areas(out: Path, tiles: list[Tile], workers: int) -> int:
+    """Re-count, from the deep-area table, the tiles the main table had no
+    objects for. A tile empty in both stays empty."""
+    by_id = {t.tile_index: t for t in tiles}
+    empty = []
+    for p in (out / "tiles").glob("*.json"):
+        d = json.loads(p.read_text())
+        if not d["cells"] and d.get("catalogue", CATALOGUE) == CATALOGUE and int(p.stem) in by_id:
+            empty.append(by_id[int(p.stem)])
+    print(f"{len(empty)} empty tiles to try in {CATALOGUE_DEEP_AREAS}", flush=True)
+    filled = failed = 0
+    with ThreadPoolExecutor(workers) as ex:
+        futs = {ex.submit(survey_tile, t, CATALOGUE_DEEP_AREAS): t for t in empty}
+        for f in as_completed(futs):
+            t = futs[f]
+            try:
+                res = f.result()
+            except Exception as e:  # noqa: BLE001 - rerun resumes
+                failed += 1
+                print(f"tile {t.tile_index}: {str(e)[:300]}", file=sys.stderr, flush=True)
+                continue
+            if res["cells"]:
+                _write_atomic(out / "tiles" / f"{t.tile_index}.json", res)
+                filled += 1
+    print(f"filled {filled}, {failed} failed", flush=True)
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="euclidsky.survey", description=__doc__.split("\n")[0])
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--limit", type=int)
-    p.add_argument("--stage", choices=("counts", "samples"), default="counts")
+    p.add_argument("--stage", choices=("counts", "samples", "fill"), default="counts")
     a = p.parse_args(argv)
     return run(a.out, a.workers, a.limit, a.stage)
 
