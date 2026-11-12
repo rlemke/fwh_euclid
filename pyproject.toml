@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fwh-euclid"
+version = "0.1.0"
+description = "ESA Euclid DR1 on the sky: the archive counts its own catalogue tile by tile, drawn as HiPS layers over real imagery; plus a check of how Euclid labels known quasars"
+requires-python = ">=3.11"
+dependencies = [
+    "facetwork>=0.31.0",
+    "numpy>=1.26",
+    "astropy>=6.0",          # VOTable reading
+    "astropy-healpix>=1.0",  # HiPS pixel geometry
+    "pillow>=10",            # HiPS PNG tiles
+    "matplotlib>=3.8",       # colour maps
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.8.0"]
+
+[project.entry-points."facetwork.domains"]
+euclid = "euclidsky.domain:domain"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+euclidsky = ["site_template.html", "ffl/*.ffl"]
+
+[tool.ruff]
+line-length = 100

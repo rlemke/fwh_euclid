@@ -1,0 +1,62 @@
+// Euclid DR1 on the sky: the archive counts its own catalogue tile by tile,
+// and the counts become sky layers a viewer draws over real imagery.
+//
+// The steps are the command-line tools' own stages, so a workflow run and a
+// CLI run write the same files: list the tiles, count them in chunks, take
+// each tile's brightest galaxies, then build the layers and the page.
+//
+// ⚠️ Nothing is downloaded in bulk: DR1 is ~1.7 PB. Every step asks the ESA
+// Euclid Science Archive (anonymous TAP) to aggregate; one tile is ~5 s.
+// The archive is a shared public service, so the fan-out is capped.
+
+namespace euclid {
+
+    /** The DR1 wide-survey tile list, and chunks of tiles to count.
+      * The list is fetched once and kept in `work_dir`. */
+    event facet Plan(work_dir: String, chunk_size: Int = 250) => (chunks: Json, tiles: Long)
+        with Effect(kind = "external") with Cost(tier = "free")
+
+    /** Count one chunk of tiles: objects on a 10 x 10 grid over each tile's
+      * core, by shape, VIS detection and brightness. A tile already counted
+      * is skipped, so a retried step does only what is missing. */
+    event facet CountChunk(work_dir: String, tiles: Json, workers: Int = 4) => (counted: Long, failed: Long)
+        with Effect(kind = "external") with Cost(tier = "cheap")
+
+    /** Each tile's brightest galaxies (photometric class galaxy, no Gaia
+      * counterpart, diffuse profile), for the viewer's markers. */
+    event facet SampleChunk(work_dir: String, tiles: Json, workers: Int = 4) => (sampled: Long, failed: Long)
+        with Effect(kind = "external") with Cost(tier = "cheap")
+
+    /** The sky layers (HiPS), galaxy markers and the page, from every
+      * counted tile in `work_dir`. */
+    event facet BuildSky(work_dir: String, site_dir: String) => (index: String, objects: Long, galaxies: Long, area_deg2: Double)
+        with Effect(kind = "io") with Cost(tier = "free")
+}
+
+namespace euclid.workflows {
+
+    /** Count every chunk, at most `width` at a time. */
+    facet CountAll(work_dir: String, chunks: Json, width: Int = 2) => (counted: Json)
+        andThen foreach chunk in $.chunks limit $.width {
+            c = euclid.CountChunk(work_dir = $.work_dir, tiles = $.chunk)
+            yield CountAll(counted += c.counted)
+        }
+
+    /** Sample every chunk, at most `width` at a time. */
+    facet SampleAll(work_dir: String, chunks: Json, width: Int = 2) => (sampled: Json)
+        andThen foreach chunk in $.chunks limit $.width {
+            s = euclid.SampleChunk(work_dir = $.work_dir, tiles = $.chunk)
+            yield SampleAll(sampled += s.sampled)
+        }
+
+    /** The whole sky page: plan, count and sample in capped fan-outs, build.
+      * The build reads the counted tiles from `work_dir`, a dependency no
+      * value carries, so it is ordered with `after`. */
+    workflow SkyMap(work_dir: String, site_dir: String, width: Int = 2) => (index: String, objects: Long) andThen {
+        plan = euclid.Plan(work_dir = $.work_dir)
+        counts = CountAll(work_dir = $.work_dir, chunks = plan.chunks, width = $.width)
+        samples = SampleAll(work_dir = $.work_dir, chunks = plan.chunks, width = $.width) after counts
+        site = euclid.BuildSky(work_dir = $.work_dir, site_dir = $.site_dir) after samples
+        yield SkyMap(index = site.index, objects = site.objects)
+    }
+}
