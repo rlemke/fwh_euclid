@@ -28,6 +28,9 @@ namespace demo {
 }
 ```
 
+More scenarios (counts only, a serialised fan-out, gating on an empty run,
+provenance, publishing): [docs/ffl-examples.md](docs/ffl-examples.md).
+
 `SkyMap` runs `euclid.Plan`, then `CountChunk` and `SampleChunk` in fan-outs
 capped at `width` chunks, then `BuildSky`. The archive is a shared public
 service, so the cap matters more than the speed.
